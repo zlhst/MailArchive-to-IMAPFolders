@@ -59,9 +59,9 @@ def sanitize_label(label, delimiter):
     # Replace any non-ASCII character with an underscore
     label = re.sub(r'[^\x00-\x7F]', '_', label)
     # Replace dots with underscores
-    label = re.sub(r'[.]', '_', label)
+    label = re.sub(r'[ .,]', '_', label)
     # Build a set of allowed characters
-    allowed_chars_set = set(string.ascii_letters + string.digits + ' _')
+    allowed_chars_set = set(string.ascii_letters + string.digits + '_')
     allowed_chars_set.add(delimiter)
     # Build a character class, escaping any special characters
     allowed_chars_escaped = [re.escape(c) for c in allowed_chars_set]
@@ -70,7 +70,7 @@ def sanitize_label(label, delimiter):
     # Replace any character not in the allowed set with an underscore
     label = re.sub(rf'[^{allowed_chars_class}]', '_', label)
     # Replace multiple underscores or spaces with a single underscore
-    label = re.sub(r'[_ ]+', '_', label)
+    label = re.sub(r'[_]+', '_', label)
     # Remove leading and trailing underscores
     label = label.strip('_')
     return label
