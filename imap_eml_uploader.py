@@ -73,20 +73,6 @@ def sanitize_label(label, delimiter):
     label = label.strip('_')
     return label
 
-def create_imap_label(imap, label):
-    try:
-        result = imap.create(label)
-        if result[0] == 'OK':
-            print(f"Created label: {label}")
-        else:
-            # Check if the label already exists
-            if 'already exists' in result[1][0].decode().lower():
-                pass  # Label already exists
-            else:
-                print(f"Failed to create label '{label}': {result[1]}")
-    except Exception as e:
-        print(f"Failed to create label '{label}': {e}")
-
 def format_internaldate(date_header):
     if not date_header:
         return None
@@ -100,49 +86,6 @@ def format_internaldate(date_header):
         return parsed_datetime
     except Exception as e:
         return None
-
-def upload_email(imap, eml_file_path, imap_folder, log_file, current_file, total_files, counter_width):
-    try:
-        with open(eml_file_path, 'rb') as f:
-            msg = f.read()
-
-        # Parse the email message
-        email_message = email.message_from_bytes(msg)
-
-        # Get the 'Date' header
-        date_header = email_message.get('Date')
-
-        # Format the date_time for IMAP APPEND
-        date_time = format_internaldate(date_header)
-        # If date_time is None, the current date/time will be used
-
-        # Append the message to the mailbox
-        flags = None
-        result = imap.append(imap_folder, flags, date_time, msg)
-        counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
-        counter = counter_format.format(current_file, total_files)
-        if result[0] == 'OK':
-            print(f"{counter} Uploaded email '{eml_file_path}' to folder '{imap_folder}'.")
-            # Write success to log file, using absolute path
-            log_file.write(f"[success] {eml_file_path}\n")
-            log_file.flush()
-        else:
-            print(f"{counter} Failed to upload email '{eml_file_path}': {result[1]}")
-            # Write failure to log file
-            log_file.write(f"[fail] {eml_file_path}\n")
-            log_file.flush()
-
-        # Sleep for 10 milliseconds / rate limit
-        time.sleep(0.01)  # 0.01 seconds = 10 milliseconds
-
-    except Exception as e:
-        counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
-        counter = counter_format.format(current_file, total_files)
-        print(f"{counter} Error uploading email '{eml_file_path}': {e}")
-        traceback.print_exc()
-        # Write failure to log file
-        log_file.write(f"[fail] {eml_file_path}\n")
-        log_file.flush()
 
 def collect_eml_files(base_dir, uploaded_files, parent_label='ARCH-IMPORT', delimiter='/'):
     files_to_upload = []
@@ -166,6 +109,98 @@ def collect_eml_files(base_dir, uploaded_files, parent_label='ARCH-IMPORT', deli
                 if eml_file_path not in uploaded_files:
                     files_to_upload.append((eml_file_path, label))
     return files_to_upload, labels_set
+
+class ImapUploader:
+    def __init__(self, args):
+        self.args = args
+        self.connect()
+
+    def connect(self):
+        self.imap = connect_to_imap(self.args)
+
+    def disconnect(self):
+        self.imap.logout()
+
+    def create_imap_label(self, label):
+        try:
+            result = self.imap.create(label)
+            if result[0] == 'OK':
+                print(f"Created label: {label}")
+            else:
+                # Check if the label already exists
+                if 'already exists' in result[1][0].decode().lower():
+                    pass  # Label already exists
+                else:
+                    print(f"Failed to create label '{label}': {result[1]}")
+        except imaplib.IMAP4.abort as e:
+            print("IMAP connection aborted during label creation, attempting to reconnect...")
+            self.connect()
+            # Retry label creation
+            try:
+                result = self.imap.create(label)
+                if result[0] == 'OK':
+                    print(f"Created label: {label}")
+                else:
+                    # Check if the label already exists
+                    if 'already exists' in result[1][0].decode().lower():
+                        pass  # Label already exists
+                    else:
+                        print(f"Failed to create label '{label}': {result[1]}")
+            except Exception as e:
+                print(f"Failed to create label '{label}' after reconnecting: {e}")
+
+        except Exception as e:
+            print(f"Failed to create label '{label}': {e}")
+
+    def upload_email(self, eml_file_path, imap_folder, log_file, current_file, total_files, counter_width):
+        try:
+            with open(eml_file_path, 'rb') as f:
+                msg = f.read()
+
+            # Parse the email message
+            email_message = email.message_from_bytes(msg)
+
+            # Get the 'Date' header
+            date_header = email_message.get('Date')
+
+            # Format the date_time for IMAP APPEND
+            date_time = format_internaldate(date_header)
+            # If date_time is None, the current date/time will be used
+
+            # Append the message to the mailbox
+            flags = None
+            try:
+                result = self.imap.append(imap_folder, flags, date_time, msg)
+            except imaplib.IMAP4.abort as e:
+                print("IMAP connection aborted during upload, attempting to reconnect...")
+                self.connect()
+                # Retry the upload
+                result = self.imap.append(imap_folder, flags, date_time, msg)
+
+            counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
+            counter = counter_format.format(current_file, total_files)
+            if result[0] == 'OK':
+                print(f"{counter} Uploaded email '{eml_file_path}' to folder '{imap_folder}'.")
+                # Write success to log file, using absolute path
+                log_file.write(f"[success] {eml_file_path}\n")
+                log_file.flush()
+            else:
+                print(f"{counter} Failed to upload email '{eml_file_path}': {result[1]}")
+                # Write failure to log file
+                log_file.write(f"[fail] {eml_file_path}\n")
+                log_file.flush()
+
+            # Sleep for 10 milliseconds / rate limit
+            time.sleep(0.001)  # 0.01 seconds = 10 milliseconds
+
+        except Exception as e:
+            counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
+            counter = counter_format.format(current_file, total_files)
+            print(f"{counter} Error uploading email '{eml_file_path}': {e}")
+            traceback.print_exc()
+            # Write failure to log file
+            log_file.write(f"[fail] {eml_file_path}\n")
+            log_file.flush()
 
 def main():
     parser = argparse.ArgumentParser(description="Upload .eml files to an IMAP server, preserving directory structure under ARCH-IMPORT folder.")
@@ -223,11 +258,11 @@ def main():
                         full_path = os.path.abspath(full_path)
                         uploaded_files.add(full_path)
 
-    imap = connect_to_imap(args)
+    uploader = ImapUploader(args)
 
     try:
         # Get the hierarchy delimiter
-        delimiter = get_hierarchy_delimiter(imap)
+        delimiter = get_hierarchy_delimiter(uploader.imap)
         print(f"Using hierarchy delimiter: '{delimiter}'")
 
         # Collect files to upload and labels to create
@@ -251,15 +286,15 @@ def main():
 
         # Create labels in hierarchical order
         for label in sorted_labels:
-            create_imap_label(imap, label)
+            uploader.create_imap_label(label)
 
         current_file = 1
         with open('upload.log', 'a') as log_file:
             for eml_file_path, label in files_to_upload:
-                upload_email(imap, eml_file_path, label, log_file, current_file, total_files, counter_width)
+                uploader.upload_email(eml_file_path, label, log_file, current_file, total_files, counter_width)
                 current_file += 1
     finally:
-        imap.logout()
+        uploader.disconnect()
         print("Logged out from IMAP server.")
 
 if __name__ == '__main__':
