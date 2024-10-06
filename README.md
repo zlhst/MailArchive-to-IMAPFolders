@@ -37,12 +37,10 @@
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/yourusername/MailArchive-to-IMAPFolders.git
+   git clone https://github.com/zelehaist/MailArchive-to-IMAPFolders.git
    cd MailArchive-to-IMAPFolders
    ```
-
-   > **Note**: Replace `yourusername` with your actual GitHub username.
-
+   
 ## Gmail Preparation
 
 Before migrating your emails, ensure your Gmail account is properly prepared:
