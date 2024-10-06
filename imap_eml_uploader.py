@@ -58,6 +58,8 @@ def get_hierarchy_delimiter(imap):
 def sanitize_label(label, delimiter):
     # Replace any non-ASCII character with an underscore
     label = re.sub(r'[^\x00-\x7F]', '_', label)
+    # Replace dots with underscores
+    label = re.sub(r'[.]', '_', label)
     # Build a set of allowed characters
     allowed_chars_set = set(string.ascii_letters + string.digits + ' _')
     allowed_chars_set.add(delimiter)
