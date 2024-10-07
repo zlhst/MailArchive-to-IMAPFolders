@@ -24,6 +24,8 @@ import traceback
 import re
 import string
 import datetime
+import socket
+import ssl
 
 def connect_to_imap(args):
     try:
@@ -127,12 +129,28 @@ class ImapUploader:
         self.connect()
 
     def connect(self):
-        self.imap = connect_to_imap(self.args)
+        # Your connection logic
+        try:
+            if self.args.imap_provider == 'gmail':
+                self.imap = imaplib.IMAP4_SSL('imap.gmail.com')
+                self.imap.login(self.args.email, self.args.password)
+                print("Logged in to Gmail IMAP server.")
+            elif self.args.imap_provider == 'custom':
+                self.imap = imaplib.IMAP4_SSL(self.args.server, self.args.port)
+                self.imap.login(self.args.username, self.args.password)
+                print(f"Logged in to IMAP server at {self.args.server}:{self.args.port}.")
+            else:
+                print("Invalid IMAP provider specified.")
+                sys.exit(1)
+        except imaplib.IMAP4.error as e:
+            print(f"IMAP login failed: {e}")
+            sys.exit(1)
 
     def disconnect(self):
         self.imap.logout()
 
     def create_imap_label(self, label):
+        # Your label creation logic
         try:
             result = self.imap.create(label)
             if result[0] == 'OK':
@@ -152,66 +170,74 @@ class ImapUploader:
                 if result[0] == 'OK':
                     print(f"Created label: {label}")
                 else:
-                    # Check if the label already exists
                     if 'already exists' in result[1][0].decode().lower():
-                        pass  # Label already exists
+                        pass
                     else:
                         print(f"Failed to create label '{label}': {result[1]}")
             except Exception as e:
                 print(f"Failed to create label '{label}' after reconnecting: {e}")
-
         except Exception as e:
             print(f"Failed to create label '{label}': {e}")
 
     def upload_email(self, eml_file_path, imap_folder, log_file, current_file, total_files, counter_width):
-        try:
-            with open(eml_file_path, 'rb') as f:
-                msg = f.read()
-
-            # Parse the email message
-            email_message = email.message_from_bytes(msg)
-
-            # Get the 'Date' header
-            date_header = email_message.get('Date')
-
-            # Format the date_time for IMAP APPEND
-            date_time = format_internaldate(date_header)
-            # If date_time is None, the current date/time will be used
-
-            # Append the message to the mailbox
-            flags = None
+        max_retries = 15
+        retry_delay = 1  # Start with a delay of 1 second
+        retries = 0
+        while retries <= max_retries:
             try:
-                result = self.imap.append(imap_folder, flags, date_time, msg)
-            except imaplib.IMAP4.abort as e:
-                print("IMAP connection aborted during upload, attempting to reconnect...")
-                self.connect()
-                # Retry the upload
+                with open(eml_file_path, 'rb') as f:
+                    msg = f.read()
+
+                # Parse the email message
+                email_message = email.message_from_bytes(msg)
+                date_header = email_message.get('Date')
+                date_time = format_internaldate(date_header)
+                flags = None
+				
+                # Sleep for a short duration to respect rate limits
+                time.sleep(0.01)  # 0.01 seconds = 10 millisecond
+
+                # Attempt to upload
                 result = self.imap.append(imap_folder, flags, date_time, msg)
 
-            counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
-            counter = counter_format.format(current_file, total_files)
-            if result[0] == 'OK':
-                print(f"{counter} Uploaded email '{eml_file_path}' to folder '{imap_folder}'.")
-                # Write success to log file, using absolute path
-                log_file.write(f"[success] {eml_file_path}\n")
-                log_file.flush()
-            else:
-                print(f"{counter} Failed to upload email '{eml_file_path}': {result[1]}")
-                # Write failure to log file
+                # Check result
+                if result[0] == 'OK':
+                    counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
+                    counter = counter_format.format(current_file, total_files)
+                    print(f"{counter} Uploaded email '{eml_file_path}' to folder '{imap_folder}'.")
+                    log_file.write(f"[success] {eml_file_path}\n")
+                    log_file.flush()
+                    break  # Exit the retry loop on success
+                else:
+                    raise Exception(f"Failed to upload email '{eml_file_path}': {result[1]}")
+
+            except (imaplib.IMAP4.abort, imaplib.IMAP4.error,
+                    ssl.SSLError, socket.error, ConnectionResetError,
+                    ConnectionAbortedError, ssl.SSLEOFError) as e:
+                retries += 1
+                print(f"Connection error during upload: {e}")
+                if retries <= max_retries:
+                    print(f"Retrying in {retry_delay} seconds... (Attempt {retries}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    self.connect()  # Reconnect before retrying
+                else:
+                    print(f"Max retries reached for email '{eml_file_path}'.")
+                    counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
+                    counter = counter_format.format(current_file, total_files)
+                    print(f"{counter} Giving up on email '{eml_file_path}'.")
+                    log_file.write(f"[fail] {eml_file_path}\n")
+                    log_file.flush()
+                    break
+		   
+            except Exception as e:
+                counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
+                counter = counter_format.format(current_file, total_files)
+                print(f"{counter} Error uploading email '{eml_file_path}': {e}")
+                traceback.print_exc()
                 log_file.write(f"[fail] {eml_file_path}\n")
                 log_file.flush()
-
-            # Sleep for 10 milliseconds / rate limit
-            time.sleep(0.01)  # 0.01 seconds = 10 milliseconds
-
-        except Exception as e:
-            counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
-            counter = counter_format.format(current_file, total_files)
-            print(f"{counter} Error uploading email '{eml_file_path}': {e}")
-            traceback.print_exc()
-            # Write failure to log file
-            log_file.write(f"[fail] {eml_file_path}\n")
-            log_file.flush()
+                break  # Exit the retry loop on non-connection errors
 
 def main():
     parser = argparse.ArgumentParser(description="Upload .eml files to an IMAP server, preserving directory structure under ARCH-IMPORT folder.")
