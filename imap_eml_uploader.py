@@ -170,44 +170,36 @@ class ImapUploader:
                 print(f"Error during logout: {e}")
 
     def create_imap_label(self, label):
-        # First, check if the label already exists
         max_retries = 15
         retry_delay = 1  # Start with a delay of 1 second
         retries = 0
 
         while retries <= max_retries:
             try:
-                status, data = self.imap.list(pattern=f'"{label}"')
+                # Attempt to select the mailbox
+                status, data = self.imap.select(label)
                 if status == 'OK':
-                    if data and len(data) > 0:
-                        print(f"Label already exists: {label}")
-                        return
-                    else:
-                        # Label does not exist, proceed to create it
-                        break
+                    print(f"Label already exists: {label}")
+                    self.imap.close()  # Close the mailbox after selection
+                    return
                 else:
-                    print(f"Failed to check if label '{label}' exists: {data}")
-                    # If unable to check, proceed to create (could be false negative)
+                    print(f"Label '{label}' does not exist. Proceeding to create.")
                     break
-            except (imaplib.IMAP4.abort, imaplib.IMAP4.error,
-                    ssl.SSLError, socket.error, ConnectionResetError,
-                    ConnectionAbortedError, ssl.SSLEOFError, socket.timeout, OSError) as e:
+            except imaplib.IMAP4.error as e:
+                # Cannot select the mailbox, so should create it
+                print(f"Label '{label}' does not exist. Proceeding to create.")
+                break
+            except Exception as e:
                 retries += 1
-                print(f"Connection error during label existence check: {e}")
+                print(f"Error checking label existence: {e}")
                 if retries <= max_retries:
                     print(f"Retrying to check label existence in {retry_delay} seconds... (Attempt {retries}/{max_retries})")
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                     self.connect()
                 else:
-                    print(f"Max retries reached while checking if label '{label}' exists.")
-                    print(f"Proceeding to create label '{label}'.")
-                    break
-            except Exception as e:
-                print(f"Error checking if label '{label}' exists: {e}")
-                traceback.print_exc()
-                # Proceed to create the label
-                break
+                    print("Max retries reached during label existence check. Exiting.")
+                    sys.exit(1)
 
         # Proceed to create the label if it does not exist
         retries = 0
