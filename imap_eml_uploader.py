@@ -27,35 +27,26 @@ import datetime
 import socket
 import ssl
 
-def connect_to_imap(args):
-    try:
-        if args.imap_provider == 'gmail':
-            imap = imaplib.IMAP4_SSL('imap.gmail.com')
-            imap.login(args.email, args.password)
-            print("Logged in to Gmail IMAP server.")
-        elif args.imap_provider == 'custom':
-            imap = imaplib.IMAP4_SSL(args.server, args.port)
-            imap.login(args.username, args.password)
-            print(f"Logged in to IMAP server at {args.server}:{args.port}.")
-        else:
-            print("Invalid IMAP provider specified.")
-            sys.exit(1)
-        return imap
-    except imaplib.IMAP4.error as e:
-        print(f"IMAP login failed: {e}")
-        sys.exit(1)
+# Set default socket timeout to prevent hanging indefinitely
+socket.setdefaulttimeout(60)  # Set default timeout to 60 seconds
 
 def get_hierarchy_delimiter(imap):
-    typ, data = imap.list()
-    if typ == 'OK':
-        # Parse the response to get the hierarchy delimiter
-        for line in data:
-            match = re.search(rb'\(([^)]*)\) "(?P<delimiter>[^"]+)" .*', line)
-            if match:
-                delimiter = match.group('delimiter').decode('utf-8')
-                return delimiter
-    # Default to '/'
-    return '/'
+    try:
+        typ, data = imap.list()
+        if typ == 'OK':
+            # Parse the response to get the hierarchy delimiter
+            for line in data:
+                match = re.search(rb'\(([^)]*)\) "(?P<delimiter>[^"]+)" .*', line)
+                if match:
+                    delimiter = match.group('delimiter').decode('utf-8')
+                    return delimiter
+        # Default to '/'
+        return '/'
+    except (imaplib.IMAP4.abort, imaplib.IMAP4.error,
+            ssl.SSLError, socket.error, ConnectionResetError,
+            ConnectionAbortedError, ssl.SSLEOFError, socket.timeout, OSError) as e:
+        print(f"Connection error during getting hierarchy delimiter: {e}")
+        return '/'
 
 def sanitize_label(label, delimiter):
     # Replace any non-ASCII character with an underscore
@@ -126,58 +117,128 @@ def collect_eml_files(base_dir, uploaded_files, parent_label='ARCH-IMPORT', deli
 class ImapUploader:
     def __init__(self, args):
         self.args = args
+        self.imap = None  # Initialize the imap attribute
         self.connect()
 
     def connect(self):
-        # Your connection logic
-        try:
-            if self.args.imap_provider == 'gmail':
-                self.imap = imaplib.IMAP4_SSL('imap.gmail.com')
-                self.imap.login(self.args.email, self.args.password)
-                print("Logged in to Gmail IMAP server.")
-            elif self.args.imap_provider == 'custom':
-                self.imap = imaplib.IMAP4_SSL(self.args.server, self.args.port)
-                self.imap.login(self.args.username, self.args.password)
-                print(f"Logged in to IMAP server at {self.args.server}:{self.args.port}.")
-            else:
-                print("Invalid IMAP provider specified.")
-                sys.exit(1)
-        except imaplib.IMAP4.error as e:
-            print(f"IMAP login failed: {e}")
-            sys.exit(1)
+        max_retries = 15
+        retry_delay = 1  # Start with a delay of 1 second
+        retries = 0
+        while retries <= max_retries:
+            try:
+                if self.args.imap_provider == 'gmail':
+                    self.imap = imaplib.IMAP4_SSL('imap.gmail.com')
+                    self.imap.login(self.args.email, self.args.password)
+                    print("Logged in to Gmail IMAP server.")
+                elif self.args.imap_provider == 'custom':
+                    self.imap = imaplib.IMAP4_SSL(self.args.server, self.args.port)
+                    self.imap.login(self.args.username, self.args.password)
+                    print(f"Logged in to IMAP server at {self.args.server}:{self.args.port}.")
+                else:
+                    print("Invalid IMAP provider specified.")
+                    sys.exit(1)
+                break  # Connected successfully, exit the loop
+            except (imaplib.IMAP4.error, imaplib.IMAP4.abort,
+                    ssl.SSLError, socket.error, ConnectionResetError,
+                    ConnectionAbortedError, ssl.SSLEOFError, socket.timeout, OSError) as e:
+                retries += 1
+                print(f"IMAP connection failed: {e}")
+                if retries <= max_retries:
+                    print(f"Retrying to connect in {retry_delay} seconds... (Attempt {retries}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    print("Max retries reached during connect. Exiting.")
+                    sys.exit(1)
+            except Exception as e:
+                retries += 1
+                print(f"Unexpected error during connect: {e}")
+                traceback.print_exc()
+                if retries <= max_retries:
+                    print(f"Retrying to connect in {retry_delay} seconds... (Attempt {retries}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    print("Max retries reached during connect. Exiting.")
+                    sys.exit(1)
 
     def disconnect(self):
-        self.imap.logout()
+        if self.imap is not None:
+            try:
+                self.imap.logout()
+            except Exception as e:
+                print(f"Error during logout: {e}")
 
     def create_imap_label(self, label):
-        # Your label creation logic
-        try:
-            result = self.imap.create(label)
-            if result[0] == 'OK':
-                print(f"Created label: {label}")
-            else:
-                # Check if the label already exists
-                if 'already exists' in result[1][0].decode().lower():
-                    pass  # Label already exists
+        # First, check if the label already exists
+        max_retries = 15
+        retry_delay = 1  # Start with a delay of 1 second
+        retries = 0
+
+        while retries <= max_retries:
+            try:
+                status, data = self.imap.list(pattern=f'"{label}"')
+                if status == 'OK':
+                    if data and len(data) > 0:
+                        print(f"Label already exists: {label}")
+                        return
+                    else:
+                        # Label does not exist, proceed to create it
+                        break
                 else:
-                    print(f"Failed to create label '{label}': {result[1]}")
-        except imaplib.IMAP4.abort as e:
-            print("IMAP connection aborted during label creation, attempting to reconnect...")
-            self.connect()
-            # Retry label creation
+                    print(f"Failed to check if label '{label}' exists: {data}")
+                    # If unable to check, proceed to create (could be false negative)
+                    break
+            except (imaplib.IMAP4.abort, imaplib.IMAP4.error,
+                    ssl.SSLError, socket.error, ConnectionResetError,
+                    ConnectionAbortedError, ssl.SSLEOFError, socket.timeout, OSError) as e:
+                retries += 1
+                print(f"Connection error during label existence check: {e}")
+                if retries <= max_retries:
+                    print(f"Retrying to check label existence in {retry_delay} seconds... (Attempt {retries}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    self.connect()
+                else:
+                    print(f"Max retries reached while checking if label '{label}' exists.")
+                    print(f"Proceeding to create label '{label}'.")
+                    break
+            except Exception as e:
+                print(f"Error checking if label '{label}' exists: {e}")
+                traceback.print_exc()
+                # Proceed to create the label
+                break
+
+        # Proceed to create the label if it does not exist
+        retries = 0
+        retry_delay = 1  # Reset retry delay for creation
+
+        while retries <= max_retries:
             try:
                 result = self.imap.create(label)
                 if result[0] == 'OK':
                     print(f"Created label: {label}")
                 else:
-                    if 'already exists' in result[1][0].decode().lower():
-                        pass
-                    else:
-                        print(f"Failed to create label '{label}': {result[1]}")
+                    print(f"Failed to create label '{label}': {result[1]}")
+                break  # Success or failure, exit the loop
+            except (imaplib.IMAP4.abort, imaplib.IMAP4.error,
+                    ssl.SSLError, socket.error, ConnectionResetError,
+                    ConnectionAbortedError, ssl.SSLEOFError, socket.timeout, OSError) as e:
+                retries += 1
+                print(f"Connection error during label creation: {e}")
+                if retries <= max_retries:
+                    print(f"Retrying to create label in {retry_delay} seconds... (Attempt {retries}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    self.connect()
+                else:
+                    print(f"Max retries reached for label '{label}'.")
+                    print(f"Giving up on creating label '{label}'.")
+                    break
             except Exception as e:
-                print(f"Failed to create label '{label}' after reconnecting: {e}")
-        except Exception as e:
-            print(f"Failed to create label '{label}': {e}")
+                print(f"Failed to create label '{label}': {e}")
+                traceback.print_exc()
+                break  # Exit retry loop for other exceptions
 
     def upload_email(self, eml_file_path, imap_folder, log_file, current_file, total_files, counter_width):
         max_retries = 15
@@ -193,9 +254,9 @@ class ImapUploader:
                 date_header = email_message.get('Date')
                 date_time = format_internaldate(date_header)
                 flags = None
-				
+
                 # Sleep for a short duration to respect rate limits
-                time.sleep(0.01)  # 0.01 seconds = 10 millisecond
+                time.sleep(0.01)  # 0.01 seconds = 10 milliseconds
 
                 # Attempt to upload
                 result = self.imap.append(imap_folder, flags, date_time, msg)
@@ -213,7 +274,7 @@ class ImapUploader:
 
             except (imaplib.IMAP4.abort, imaplib.IMAP4.error,
                     ssl.SSLError, socket.error, ConnectionResetError,
-                    ConnectionAbortedError, ssl.SSLEOFError) as e:
+                    ConnectionAbortedError, ssl.SSLEOFError, socket.timeout, OSError) as e:
                 retries += 1
                 print(f"Connection error during upload: {e}")
                 if retries <= max_retries:
@@ -229,7 +290,7 @@ class ImapUploader:
                     log_file.write(f"[fail] {eml_file_path}\n")
                     log_file.flush()
                     break
-		   
+
             except Exception as e:
                 counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
                 counter = counter_format.format(current_file, total_files)
