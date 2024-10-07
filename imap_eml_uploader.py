@@ -202,7 +202,7 @@ class ImapUploader:
                 log_file.flush()
 
             # Sleep for 10 milliseconds / rate limit
-            time.sleep(0.001)  # 0.01 seconds = 10 milliseconds
+            time.sleep(0.01)  # 0.01 seconds = 10 milliseconds
 
         except Exception as e:
             counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
