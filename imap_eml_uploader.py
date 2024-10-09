@@ -262,10 +262,26 @@ class ImapUploader:
                     log_file.flush()
                     break  # Exit the retry loop on success
                 else:
-                    raise Exception(f"Failed to upload email '{eml_file_path}': {result[1]}")
+                    # Get error message
+                    error_message = ''
+                    if isinstance(result[1], list) and result[1]:
+                        error_message = b''.join(result[1]).decode('utf-8', errors='ignore')
+                    else:
+                        error_message = str(result[1])
 
-            except (imaplib.IMAP4.abort, imaplib.IMAP4.error,
-                    ssl.SSLError, socket.error, ConnectionResetError,
+                    if 'TOOBIG' in error_message.upper():
+                        # Soft error, log to 'upload.softerror.log'
+                        with open('upload.softerror.log', 'a') as soft_log_file:
+                            soft_log_file.write(f"{eml_file_path}: {error_message}\n")
+                        counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
+                        counter = counter_format.format(current_file, total_files)
+                        print(f"{counter} Soft error uploading email '{eml_file_path}': {error_message}. Skipping to next email.")
+                        break  # Exit the retry loop to proceed to next email
+                    else:
+                        # Raise exception to trigger retries or error handling
+                        raise Exception(f"Failed to upload email '{eml_file_path}': {error_message}")
+
+            except (imaplib.IMAP4.abort, ssl.SSLError, socket.error, ConnectionResetError,
                     ConnectionAbortedError, ssl.SSLEOFError, socket.timeout, OSError) as e:
                 retries += 1
                 print(f"Connection error during upload: {e}")
@@ -282,7 +298,32 @@ class ImapUploader:
                     log_file.write(f"[fail] {eml_file_path}\n")
                     log_file.flush()
                     break
-
+            except imaplib.IMAP4.error as e:
+                error_message = str(e)
+                if 'TOOBIG' in error_message.upper():
+                    # Soft error, log to 'upload.softerror.log'
+                    with open('upload.softerror.log', 'a') as soft_log_file:
+                        soft_log_file.write(f"{eml_file_path}: {error_message}\n")
+                    counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
+                    counter = counter_format.format(current_file, total_files)
+                    print(f"{counter} Soft error uploading email '{eml_file_path}': {error_message}. Skipping to next email.")
+                    break  # Exit the retry loop to proceed to next email
+                else:
+                    retries += 1
+                    print(f"IMAP4 error during upload: {e}")
+                    if retries <= max_retries:
+                        print(f"Retrying in {retry_delay} seconds... (Attempt {retries}/{max_retries})")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                        self.connect()
+                    else:
+                        print(f"Max retries reached for email '{eml_file_path}'.")
+                        counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
+                        counter = counter_format.format(current_file, total_files)
+                        print(f"{counter} Giving up on email '{eml_file_path}'.")
+                        log_file.write(f"[fail] {eml_file_path}\n")
+                        log_file.flush()
+                        break
             except Exception as e:
                 counter_format = f"{{:{counter_width}d}}/{{:{counter_width}d}}"
                 counter = counter_format.format(current_file, total_files)
