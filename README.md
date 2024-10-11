@@ -214,7 +214,7 @@ label_priority_map = {"Sent": 0}
 ## Notes
 
 - **Starting Over**: If you need to start the migration process from scratch, ensure you remove all previously uploaded emails and delete them entirely from Gmail's recycle bin. Otherwise, they might be removed instead of uploaded again.
-- **Upload Duration**: Uploading 200k emails totaling 45GB can take approximately **36-48 hours** on a regular internet connection (20-30 Mbit/s).
+- **Upload Duration**: Uploading 200k emails totaling 45GB can take approximately **36-96 hours** on a regular internet connection (20-30 Mbit/s).
 - **Label Name Compatibility**: Labels with non-ASCII or special characters will be converted to underscores `_` for compatibility reasons.
 - **Reviewing Emails Before Upload**:
   - Use **[Thunderbird Extended Support Release (ESR)](https://www.thunderbird.net/en-US/)** to review your emails.
