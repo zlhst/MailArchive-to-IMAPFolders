@@ -86,8 +86,8 @@ def parse_arguments():
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
 Examples:
-  ab.export_directory_check.py /path/to/directory
-  ab.export_directory_check.py --help
+  check_export_results.py /path/to/directory
+  check_export_results.py --help
 """
     )
     parser.add_argument(
@@ -108,8 +108,8 @@ def main():
     if args.directory is None:
         # No directory provided; display usage information
         print("Error: No directory provided.\n")
-        print("Usage: ab.export_directory_check.py <directory>\n")
-        print("Use 'ab.export_directory_check.py --help' for more information.")
+        print("Usage: check_export_results.py <directory>\n")
+        print("Use 'check_export_results.py --help' for more information.")
         sys.exit(1)
 
     dir_path = args.directory
